@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>BÁO CÁO TỔNG HỢP</title>
+  <style>
+    :root{
+      --accent:#ff4d4f; --bg:rgba(0,0,0,.5); --card:rgba(255,255,255,.08); --text:#fff; --shadow:0 6px 20px rgba(0,0,0,.35); --active:rgba(255,255,255,.18);
+    }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{height:100%}
+    body{font-family:system-ui,Arial,sans-serif;margin:0;color:var(--text);background:#0a0a0a url('NenVuTru.png') no-repeat center center fixed;background-size:cover;display:flex;flex-direction:column}
+
+    .topbar{position:sticky;top:0;z-index:10;background:linear-gradient(0deg,rgba(0,0,0,.2),rgba(0,0,0,.7));backdrop-filter:blur(8px);padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .brand{display:flex;align-items:center;justify-content:center}
+    .brand h1{font-size:18px;margin:0;text-shadow:1px 1px 2px #000}
+
+    .seg{display:flex;gap:8px;margin-top:8px}
+    .seg .tab{flex:1;text-align:center;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:var(--text);cursor:pointer}
+    .seg .tab.active{background:var(--active);box-shadow:var(--shadow)}
+
+    .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+    .control{background:var(--bg);border-radius:14px;padding:10px;box-shadow:var(--shadow)}
+    label{font-size:12px;opacity:.9;display:block;margin-bottom:4px}
+    select,input[type="date"],button.btn{width:100%;font-size:16px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:var(--text)}
+    button.btn{cursor:pointer}
+
+    #pdfContainer{padding:8px 12px 20px}
+    .icons{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .pdf-icon{width:100%;cursor:pointer;transition:transform .15s ease}
+    .pdf-icon:active{transform:scale(.97)}
+    .pdf-icon img{width:100%;height:auto;border-radius:16px;box-shadow:var(--shadow)}
+
+    .hint{font-size:13px;opacity:.95;margin-top:6px}
+
+    .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 14px;border-radius:12px;box-shadow:var(--shadow);font-size:14px;z-index:9999;opacity:0;pointer-events:none;transition:opacity .25s ease}
+    .toast.show{opacity:1}
+
+    @media (max-width:460px){ .controls{grid-template-columns:1fr} .icons{grid-template-columns:repeat(2,1fr)} }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><h1>BÁO CÁO TỔNG HỢP</h1></div>
+
+    <div class="seg" id="modeSeg">
+      <div class="tab active" data-mode="sosach">BÁO CÁO SỔ SÁCH</div>
+      <div class="tab" data-mode="kinhdoanh">BÁO CÁO KINH DOANH</div>
+    </div>
+
+    <div class="controls">
+      <div class="control">
+        <label for="repoSelect">Chọn cơ sở</label>
+        <select id="repoSelect">
+          <option value="SBM1">SBM1</option>
+          <option value="SBM2">SBM2</option>
+          <option value="SBM3">SBM3</option>
+        </select>
+      </div>
+      <div class="control" id="dateGroup">
+        <label id="dateLabel" for="datePicker">Chọn ngày</label>
+        <input type="date" id="datePicker" />
+        <div class="hint" id="dateHint">&nbsp;</div>
+        <!-- khi chọn KINH DOANH thì hiển thị nút này thay thế ô ngày -->
+        <div id="bizInline" style="display:none">
+<label for="repoSelect">Chọn để mở Báo Cáo</label>
+
+          <button class="btn" id="openBizInline">MỞ BÁO CÁO KINH DOANH</button>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="pdfContainer">
+    <div class="icons" id="icons"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  // ===== REPO MAPPING =====
+  window.REPOS = {
+    SBM1: 'https://raw.githubusercontent.com/saubinhminh/1ILIILIIXIILI/main/',
+    SBM2: 'https://raw.githubusercontent.com/saubinhminh/2ILIILIIXIILI/main/',
+    SBM3: 'https://raw.githubusercontent.com/saubinhminh/3ILIILIIXIILI/main/'
+  };
+  const BIZ_FILES = { SBM1: '1BAOCAO.PDF', SBM2: '2BAOCAO.PDF', SBM3: '3BAOCAO.PDF' };
+  const FILE_PATTERNS = [ d => `1BAN${d}.pdf`, d => `1QUY${d}.pdf`, d => `1XUAT${d}.pdf` ];
+
+  // ===== DOM =====
+  const modeSeg = document.getElementById('modeSeg');
+  const repoSelect = document.getElementById('repoSelect');
+  const dateGroup = document.getElementById('dateGroup');
+  const dateLabel = document.getElementById('dateLabel');
+  const datePicker = document.getElementById('datePicker');
+  const dateHint = document.getElementById('dateHint');
+  const iconsWrap = document.getElementById('icons');
+  const toast = document.getElementById('toast');
+  const bizInline = document.getElementById('bizInline');
+  const openBizInline = document.getElementById('openBizInline');
+
+  // ===== UTILS =====
+  function rawBase(){ return REPOS[repoSelect.value]; }
+  function toISODate(d){ return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().split('T')[0]; }
+  function ddmmyyyy(d){ const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yyyy=d.getFullYear(); return `${dd}${mm}${yyyy}`; }
+  function checkFileExists(url){ return fetch(url,{method:'HEAD'}).then(r=>r.ok).catch(()=>false); }
+  async function hasReportByDDMMYYYY(base,dstr){ for(const fn of FILE_PATTERNS){ if(await checkFileExists(base+fn(dstr))) return true; } return false; }
+  function showToast(msg){ toast.textContent=msg; toast.classList.add('show'); clearTimeout(showToast._t); showToast._t=setTimeout(()=>toast.classList.remove('show'),2200); }
+
+  function createIcon(image, url){
+    const div=document.createElement('div'); div.className='pdf-icon';
+    const img=document.createElement('img'); img.src=image; img.alt=image;
+    div.onclick=()=>{ const fullURL=rawBase()+url; const viewerURL='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(fullURL); window.open(viewerURL,'_blank'); };
+    div.appendChild(img); return div;
+  }
+
+  async function loadPDFIcons(dateValue){
+    iconsWrap.innerHTML='';
+    const d = new Date(dateValue);
+    const dstr = ddmmyyyy(d);
+    const files = { 'nutbanhang.png':`1BAN${dstr}.pdf`, 'nutthuchi.png':`1QUY${dstr}.pdf`, 'nutxuatkho.png':`1XUAT${dstr}.pdf` };
+    let found=0;
+    for(const [img,file] of Object.entries(files)){
+      if(await checkFileExists(rawBase()+file)){ iconsWrap.appendChild(createIcon(img,file)); found++; }
+    }
+    if(found){ dateHint.textContent=`Có ${found} báo cáo cho ngày này.`; }
+    else{ dateHint.textContent='Ngày này KHÔNG có báo cáo.'; showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.'); await jumpToNearestAvailable(d); }
+  }
+
+  async function jumpToNearestAvailable(fromDate){
+    const base = rawBase();
+    const limit = 180; // số ngày tối đa để tìm
+    for(let i=1;i<=limit;i++){
+      // kiểm tra hai phía: -i rồi +i
+      const prev = new Date(fromDate); prev.setDate(prev.getDate()-i);
+      if(await hasReportByDDMMYYYY(base, ddmmyyyy(prev))){ datePicker.value = toISODate(prev); await loadPDFIcons(datePicker.value); return; }
+      const next = new Date(fromDate); next.setDate(next.getDate()+i);
+      if(await hasReportByDDMMYYYY(base, ddmmyyyy(next))){ datePicker.value = toISODate(next); await loadPDFIcons(datePicker.value); return; }
+    }
+    showToast('Không tìm thấy ngày có báo cáo trong phạm vi tìm.');
+  }
+
+  // ===== EVENTS =====
+  modeSeg.addEventListener('click', e=>{
+    const tab=e.target.closest('.tab'); if(!tab) return;
+    document.querySelectorAll('.seg .tab').forEach(t=>t.classList.remove('active')); tab.classList.add('active');
+    const isBiz = tab.dataset.mode==='kinhdoanh';
+    dateLabel.style.display = isBiz? 'none' : '';
+    datePicker.style.display = isBiz? 'none' : '';
+    dateHint.style.display   = isBiz? 'none' : '';
+    bizInline.style.display  = isBiz? 'block': 'none';
+    iconsWrap.style.display  = isBiz? 'none' : 'grid';
+  });
+
+  repoSelect.addEventListener('change', ()=>{
+    localStorage.setItem('sbm_repo', repoSelect.value);
+    const mode = document.querySelector('.seg .tab.active').dataset.mode;
+    if(mode==='sosach') loadPDFIcons(datePicker.value);
+  });
+
+  datePicker.addEventListener('change', ()=>{ loadPDFIcons(datePicker.value); });
+
+  openBizInline.addEventListener('click', async ()=>{
+    const url = rawBase()+BIZ_FILES[repoSelect.value];
+    if(!(await checkFileExists(url))){ showToast('Chưa có BÁO CÁO KINH DOANH cho cơ sở này.'); return; }
+    const viewerURL='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(url);
+    window.open(viewerURL,'_blank');
+  });
+
+  // ===== INIT =====
+  (function init(){
+    // nhớ cơ sở
+    const savedRepo = localStorage.getItem('sbm_repo') || 'SBM1';
+    repoSelect.value = savedRepo;
+    // set date = hôm nay, khóa tương lai
+    const today = new Date(); const todayStr = toISODate(today); datePicker.value=todayStr; datePicker.max=todayStr;
+    // load lần đầu (sổ sách)
+    loadPDFIcons(todayStr);
+  })();
+</script>
+</body>
+</html>
