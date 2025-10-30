@@ -17,20 +17,26 @@
     .brand h1{font-size:18px;margin:0;text-shadow:1px 1px 2px #000}
 
     .seg{display:flex;gap:8px;margin-top:8px}
-    .seg .tab{flex:1;text-align:center;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:var(--text);cursor:pointer}
+    .seg .tab{flex:1;text-align:center;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:var(--text);cursor:pointer;user-select:none}
     .seg .tab.active{background:var(--active);box-shadow:var(--shadow)}
+    .seg .tab:focus{outline:2px solid var(--accent)}
 
     .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
     .control{background:var(--bg);border-radius:14px;padding:10px;box-shadow:var(--shadow)}
     label{font-size:12px;opacity:.9;display:block;margin-bottom:4px}
     select,input[type="date"],button.btn{width:100%;font-size:16px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:var(--text)}
     button.btn{cursor:pointer}
+    button.btn[disabled]{opacity:.6;cursor:not-allowed}
 
     #pdfContainer{padding:8px 12px 20px}
     .icons{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
     .pdf-icon{width:100%;cursor:pointer;transition:transform .15s ease}
     .pdf-icon:active{transform:scale(.97)}
     .pdf-icon img{width:100%;height:auto;border-radius:16px;box-shadow:var(--shadow)}
+
+    .skeleton{position:relative;overflow:hidden;border-radius:16px;height:70px;background:rgba(255,255,255,.08)}
+    .skeleton:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);animation:shimmer 1.3s infinite}
+    @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
 
     .hint{font-size:13px;opacity:.95;margin-top:6px}
 
@@ -44,9 +50,9 @@
   <div class="topbar">
     <div class="brand"><h1>BÁO CÁO TỔNG HỢP</h1></div>
 
-    <div class="seg" id="modeSeg">
-      <div class="tab active" data-mode="sosach">SỔ SÁCH</div>
-      <div class="tab" data-mode="kinhdoanh">KINH DOANH</div>
+    <div class="seg" id="modeSeg" role="tablist" aria-label="Chế độ hiển thị">
+      <div class="tab active" data-mode="sosach" role="tab" tabindex="0" aria-selected="true">SỔ SÁCH</div>
+      <div class="tab" data-mode="kinhdoanh" role="tab" tabindex="-1" aria-selected="false">KINH DOANH</div>
     </div>
 
     <div class="controls">
@@ -62,12 +68,13 @@
         <label id="dateLabel" for="datePicker">Chọn ngày</label>
         <input type="date" id="datePicker" />
         <div class="hint" id="dateHint">&nbsp;</div>
-        <!-- khi chọn KINH DOANH thì hiển thị nút này thay thế ô ngày -->
+        <!-- khi chọn KINH DOANH thì hiển thị cụm chọn năm + nút mở -->
         <div id="bizInline" style="display:none">
-<label for="repoSelect">Chọn để mở Báo Cáo</label>
-
+          <label for="yearSelect">Chọn năm</label>
+          <select id="yearSelect"></select>
+          <div class="hint" id="yearHint">&nbsp;</div>
           <button class="btn" id="openBizInline">MỞ BÁO CÁO KINH DOANH</button>
-         </div>
+        </div>
       </div>
     </div>
   </div>
@@ -76,7 +83,7 @@
     <div class="icons" id="icons"></div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
   // ===== REPO MAPPING =====
@@ -85,58 +92,119 @@
     SBM2: 'https://raw.githubusercontent.com/saubinhminh/2ILIILIIXIILI/main/',
     SBM3: 'https://raw.githubusercontent.com/saubinhminh/3ILIILIIXIILI/main/'
   };
-  const BIZ_FILES = { SBM1: '1BAOCAO.pdf', SBM2: '2BAOCAO.pdf', SBM3: '3BAOCAO.pdf' };
+  const BIZ_PREFIX = { SBM1: '1BAO', SBM2: '2BAO', SBM3: '3BAO' };
   const FILE_PATTERNS = [ d => `1BAN${d}.pdf`, d => `1QUY${d}.pdf`, d => `1XUAT${d}.pdf` ];
 
   // ===== DOM =====
   const modeSeg = document.getElementById('modeSeg');
   const repoSelect = document.getElementById('repoSelect');
-  const dateGroup = document.getElementById('dateGroup');
   const dateLabel = document.getElementById('dateLabel');
   const datePicker = document.getElementById('datePicker');
   const dateHint = document.getElementById('dateHint');
   const iconsWrap = document.getElementById('icons');
   const toast = document.getElementById('toast');
   const bizInline = document.getElementById('bizInline');
+  const yearSelect = document.getElementById('yearSelect');
+  const yearHint = document.getElementById('yearHint');
   const openBizInline = document.getElementById('openBizInline');
 
-  // ===== UTILS =====
+  // ===== STATE & UTILS =====
+  function getBizFile(repo, year){
+    const prefix = BIZ_PREFIX[repo] || '1BAO';
+    return `${prefix}${year}.pdf`;
+  }
+
+  const CACHE = new Map(); // url -> boolean
+  let lastRunToken = 0; // để huỷ các lần load cũ nếu user đổi nhanh
+
   function rawBase(){ return REPOS[repoSelect.value]; }
   function toISODate(d){ return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().split('T')[0]; }
   function ddmmyyyy(d){ const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yyyy=d.getFullYear(); return `${dd}${mm}${yyyy}`; }
-  function checkFileExists(url){ return fetch(url,{method:'HEAD'}).then(r=>r.ok).catch(()=>false); }
-  async function hasReportByDDMMYYYY(base,dstr){ for(const fn of FILE_PATTERNS){ if(await checkFileExists(base+fn(dstr))) return true; } return false; }
-  function showToast(msg){ toast.textContent=msg; toast.classList.add('show'); clearTimeout(showToast._t); showToast._t=setTimeout(()=>toast.classList.remove('show'),2200); }
+
+  function timeout(ms){ return new Promise(r=>setTimeout(r,ms)); }
+  function withTimeout(promiseFactory, ms){
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort('timeout'), ms);
+    return Promise.race([
+      (async ()=>{ try{ return await promiseFactory(ctrl.signal); }catch{return false;} finally{ clearTimeout(t); } })(),
+      timeout(ms+50).then(()=>false)
+    ]);
+  }
+
+  async function checkFileExists(url){
+    if(CACHE.has(url)) return CACHE.get(url);
+    const ok = await withTimeout(async (signal)=>{
+      const r = await fetch(url,{method:'HEAD',signal});
+      return r.ok;
+    }, 6000);
+    CACHE.set(url, !!ok);
+    return !!ok;
+  }
+
+  async function hasReportByDDMMYYYY(base, dstr){
+    const urls = FILE_PATTERNS.map(fn => base + fn(dstr));
+    const results = await Promise.all(urls.map(u => checkFileExists(u)));
+    return results.some(Boolean);
+  }
+
+  function showToast(msg){
+    toast.textContent=msg; toast.classList.add('show');
+    clearTimeout(showToast._t); showToast._t=setTimeout(()=>toast.classList.remove('show'),2200);
+  }
 
   function createIcon(image, url){
     const div=document.createElement('div'); div.className='pdf-icon';
-    const img=document.createElement('img'); img.src=image; img.alt=image;
+    const img=document.createElement('img'); img.src=image; img.alt=image; img.loading='lazy';
     div.onclick=()=>{ const fullURL=rawBase()+url; const viewerURL='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(fullURL); window.open(viewerURL,'_blank'); };
     div.appendChild(img); return div;
   }
 
-  async function loadPDFIcons(dateValue){
+  function renderSkeletons(n=3){
     iconsWrap.innerHTML='';
-    const d = new Date(dateValue);
-    const dstr = ddmmyyyy(d);
-    const files = { 'nutbanhang.png':`1BAN${dstr}.pdf`, 'nutthuchi.png':`1QUY${dstr}.pdf`, 'nutxuatkho.png':`1XUAT${dstr}.pdf` };
-    let found=0;
-    for(const [img,file] of Object.entries(files)){
-      if(await checkFileExists(rawBase()+file)){ iconsWrap.appendChild(createIcon(img,file)); found++; }
-    }
-    if(found){ dateHint.textContent=`Có ${found} báo cáo cho ngày này.`; }
-    else{ dateHint.textContent='Ngày này KHÔNG có báo cáo.'; showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.'); await jumpToNearestAvailable(d); }
+    for(let i=0;i<n;i++){ const s=document.createElement('div'); s.className='skeleton'; iconsWrap.appendChild(s); }
   }
 
-  async function jumpToNearestAvailable(fromDate){
+  async function loadPDFIcons(dateValue){
+    const runToken = ++lastRunToken;
+    renderSkeletons();
+    const d = new Date(dateValue);
+    const dstr = ddmmyyyy(d);
+    const entries = [
+      {img:'nutbanhang.png', file:`1BAN${dstr}.pdf`},
+      {img:'nutthuchi.png', file:`1QUY${dstr}.pdf`},
+      {img:'nutxuatkho.png', file:`1XUAT${dstr}.pdf`}
+    ];
+
+    const checks = await Promise.all(entries.map(e=>checkFileExists(rawBase()+e.file)));
+    if(runToken!==lastRunToken) return;
+
+    iconsWrap.innerHTML='';
+    let found=0;
+    entries.forEach((e,i)=>{ if(checks[i]){ iconsWrap.appendChild(createIcon(e.img,e.file)); found++; } });
+
+    if(found){ dateHint.textContent=`Có ${found} báo cáo cho ngày này.`; }
+    else{
+      dateHint.textContent='Ngày này KHÔNG có báo cáo.'; showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.');
+      await jumpToNearestAvailable(d, runToken);
+    }
+  }
+
+  async function jumpToNearestAvailable(fromDate, runToken){
     const base = rawBase();
     const limit = 180; // số ngày tối đa để tìm
     for(let i=1;i<=limit;i++){
-      // kiểm tra hai phía: -i rồi +i
+      if(runToken!==lastRunToken) return;
       const prev = new Date(fromDate); prev.setDate(prev.getDate()-i);
-      if(await hasReportByDDMMYYYY(base, ddmmyyyy(prev))){ datePicker.value = toISODate(prev); await loadPDFIcons(datePicker.value); return; }
       const next = new Date(fromDate); next.setDate(next.getDate()+i);
-      if(await hasReportByDDMMYYYY(base, ddmmyyyy(next))){ datePicker.value = toISODate(next); await loadPDFIcons(datePicker.value); return; }
+
+      const [hasPrev, hasNext] = await Promise.all([
+        hasReportByDDMMYYYY(base, ddmmyyyy(prev)),
+        hasReportByDDMMYYYY(base, ddmmyyyy(next))
+      ]);
+
+      if(runToken!==lastRunToken) return;
+      if(hasPrev){ datePicker.value = toISODate(prev); await loadPDFIcons(datePicker.value); return; }
+      if(hasNext){ datePicker.value = toISODate(next); await loadPDFIcons(datePicker.value); return; }
     }
     showToast('Không tìm thấy ngày có báo cáo trong phạm vi tìm.');
   }
@@ -144,39 +212,108 @@
   // ===== EVENTS =====
   modeSeg.addEventListener('click', e=>{
     const tab=e.target.closest('.tab'); if(!tab) return;
-    document.querySelectorAll('.seg .tab').forEach(t=>t.classList.remove('active')); tab.classList.add('active');
+    document.querySelectorAll('.seg .tab').forEach(t=>{ t.classList.remove('active'); t.setAttribute('aria-selected','false'); t.tabIndex=-1; });
+    tab.classList.add('active'); tab.setAttribute('aria-selected','true'); tab.tabIndex=0; tab.focus();
     const isBiz = tab.dataset.mode==='kinhdoanh';
+    localStorage.setItem('sbm_mode', isBiz? 'kinhdoanh':'sosach');
     dateLabel.style.display = isBiz? 'none' : '';
     datePicker.style.display = isBiz? 'none' : '';
     dateHint.style.display   = isBiz? 'none' : '';
     bizInline.style.display  = isBiz? 'block': 'none';
     iconsWrap.style.display  = isBiz? 'none' : 'grid';
+    if(isBiz) updateBizButtonState();
+  });
+
+  // phím mũi tên để đổi tab
+  modeSeg.addEventListener('keydown', (e)=>{
+    if(e.key!=='ArrowRight' && e.key!=='ArrowLeft') return;
+    const tabs=[...document.querySelectorAll('.seg .tab')];
+    const idx=tabs.findIndex(t=>t.classList.contains('active'));
+    const next = e.key==='ArrowRight' ? (idx+1)%tabs.length : (idx-1+tabs.length)%tabs.length;
+    tabs[next].click();
   });
 
   repoSelect.addEventListener('change', ()=>{
     localStorage.setItem('sbm_repo', repoSelect.value);
-    const mode = document.querySelector('.seg .tab.active').dataset.mode;
-    if(mode==='sosach') loadPDFIcons(datePicker.value);
+    const isBiz = (localStorage.getItem('sbm_mode')||'sosach')==='kinhdoanh';
+    if(isBiz){ updateBizButtonState(); } else { loadPDFIcons(datePicker.value); }
+  });
+
+  yearSelect.addEventListener('change', ()=>{
+    localStorage.setItem('sbm_year', yearSelect.value);
+    updateBizButtonState();
   });
 
   datePicker.addEventListener('change', ()=>{ loadPDFIcons(datePicker.value); });
 
   openBizInline.addEventListener('click', async ()=>{
-    const url = rawBase()+BIZ_FILES[repoSelect.value];
-    if(!(await checkFileExists(url))){ showToast('Chưa có BÁO CÁO KINH DOANH cho cơ sở này.'); return; }
+    const year = yearSelect.value;
+    const file = getBizFile(repoSelect.value, year);
+    const url = rawBase()+file;
+    if(!(await checkFileExists(url))){ showToast('Chưa có BÁO CÁO KINH DOANH cho cơ sở/năm này.'); return; }
     const viewerURL='https://docs.google.com/gview?embedded=true&url='+encodeURIComponent(url);
     window.open(viewerURL,'_blank');
   });
 
+  async function updateBizButtonState(){
+    openBizInline.disabled = true;
+    const year = yearSelect.value;
+    const file = getBizFile(repoSelect.value, year);
+    const url = rawBase()+file;
+    const ok = await checkFileExists(url);
+    openBizInline.disabled = !ok;
+    yearHint.textContent = ok ? `Tìm thấy báo cáo: ${file}` : `Không tìm thấy: ${file}`;
+  }
+
   // ===== INIT =====
   (function init(){
-    // nhớ cơ sở
     const savedRepo = localStorage.getItem('sbm_repo') || 'SBM1';
     repoSelect.value = savedRepo;
-    // set date = hôm nay, khóa tương lai
-    const today = new Date(); const todayStr = toISODate(today); datePicker.value=todayStr; datePicker.max=todayStr;
-    // load lần đầu (sổ sách)
-    loadPDFIcons(todayStr);
+
+    // set date = hôm nay, khoá tương lai
+    const today = new Date();
+    const todayStr = toISODate(today);
+    datePicker.value=todayStr; datePicker.max=todayStr;
+
+    // populate year options (8 năm: từ năm hiện tại+1 xuống hiện tại-6)
+    const curYear = new Date().getFullYear();
+    const savedYear = localStorage.getItem('sbm_year');
+    const start = curYear - 6; const end = curYear + 1;
+    yearSelect.innerHTML = '';
+    for(let y=end; y>=start; y--){
+      const opt = document.createElement('option'); opt.value=String(y); opt.textContent=String(y);
+      yearSelect.appendChild(opt);
+    }
+    yearSelect.value = savedYear && +savedYear>=start && +savedYear<=end ? savedYear : String(curYear);
+
+    // nhớ mode
+    const savedMode = localStorage.getItem('sbm_mode') || 'sosach';
+    const toActivate = document.querySelector(`.seg .tab[data-mode="${savedMode}"]`) || document.querySelector('.seg .tab');
+    toActivate.click();
+
+    if(savedMode==='kinhdoanh'){
+      updateBizButtonState();
+    } else {
+      loadPDFIcons(todayStr);
+    }
+  })();
+
+  // ===== OFFLINE HANDLING =====
+  window.addEventListener('offline', ()=> showToast('Mất kết nối mạng. Một số báo cáo sẽ không tải được.'));
+  window.addEventListener('online', ()=> showToast('Đã khôi phục mạng.'));
+
+  // ===== LIGHT TESTS (console) =====
+  (function tests(){
+    try{
+      console.groupCollapsed('Self-tests');
+      console.assert(getBizFile('SBM1','2025')==='1BAO2025.pdf','SBM1 mapping failed');
+      console.assert(getBizFile('SBM2','2024')==='2BAO2024.pdf','SBM2 mapping failed');
+      console.assert(getBizFile('SBM3','2023')==='3BAO2023.pdf','SBM3 mapping failed');
+      const t = new Date('2025-10-05T00:00:00');
+      console.assert(ddmmyyyy(t)==='05102025','ddmmyyyy failed');
+      console.log('All tests passed ✅');
+      console.groupEnd();
+    }catch(e){ console.error('Self-tests error', e); }
   })();
 </script>
 </body>
