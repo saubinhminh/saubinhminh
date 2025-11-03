@@ -38,6 +38,7 @@
     .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 14px;border-radius:12px;box-shadow:var(--shadow);font-size:14px;z-index:9999;opacity:0;pointer-events:none;transition:opacity .25s ease}
     .toast.show{opacity:1}
 
+    .adjacent{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
     @media (max-width:460px){ .controls{grid-template-columns:1fr} .icons{grid-template-columns:repeat(2,1fr)} }
   </style>
 </head>
@@ -58,6 +59,12 @@
         <label id="dateLabel" for="datePicker">Chọn ngày</label>
         <input type="date" id="datePicker" />
         <div class="hint" id="dateHint">&nbsp;</div>
+
+        <!-- Nút tìm ngày có file liền kề -->
+        <div class="adjacent">
+          <button class="btn" id="prevAvail">◀️ Ngày trước (có file)</button>
+          <button class="btn" id="nextAvail">Ngày sau (có file) ▶️</button>
+        </div>
       </div>
     </div>
   </div>
@@ -75,20 +82,26 @@
     SBM2: 'https://raw.githubusercontent.com/saubinhminh/2ILIILIIXIILI/main/',
     SBM3: 'https://raw.githubusercontent.com/saubinhminh/3ILIILIIXIILI/main/'
   };
-  const FILE_PATTERNS = [ d => `1BAN${d}.pdf`, d => `1QUY${d}.pdf`, d => `1XUAT${d}.pdf` ];
+  // lấy số tiền tố theo cơ sở
+  const REPO_NUM = { SBM1:'1', SBM2:'2', SBM3:'3' };
+  // tạo pattern tên file theo tiền tố
+  const FILE_PATTERNS = (p) => [ d => `${p}BAN${d}.pdf`, d => `${p}QUY${d}.pdf`, d => `${p}XUAT${d}.pdf` ];
 
   // ===== DOM =====
   const repoSelect = document.getElementById('repoSelect');
   const datePicker = document.getElementById('datePicker');
-  const dateHint = document.getElementById('dateHint');
-  const iconsWrap = document.getElementById('icons');
-  const toast = document.getElementById('toast');
+  const dateHint   = document.getElementById('dateHint');
+  const iconsWrap  = document.getElementById('icons');
+  const toast      = document.getElementById('toast');
+  const prevBtn    = document.getElementById('prevAvail');
+  const nextBtn    = document.getElementById('nextAvail');
 
   // ===== STATE & UTILS =====
   const CACHE = new Map(); // url -> boolean
   let lastRunToken = 0; // để huỷ các lần load cũ nếu user đổi nhanh
 
   function rawBase(){ return REPOS[repoSelect.value]; }
+  function repoNum(){ return REPO_NUM[repoSelect.value] || '1'; }
   function toISODate(d){ return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().split('T')[0]; }
   function ddmmyyyy(d){ const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yyyy=d.getFullYear(); return `${dd}${mm}${yyyy}`; }
 
@@ -113,7 +126,8 @@
   }
 
   async function hasReportByDDMMYYYY(base, dstr){
-    const urls = FILE_PATTERNS.map(fn => base + fn(dstr));
+    const p = repoNum();
+    const urls = FILE_PATTERNS(p).map(fn => base + fn(dstr));
     const results = await Promise.all(urls.map(u => checkFileExists(u)));
     return results.some(Boolean);
   }
@@ -140,10 +154,11 @@
     renderSkeletons();
     const d = new Date(dateValue);
     const dstr = ddmmyyyy(d);
+    const p = repoNum();
     const entries = [
-      {img:'nutbanhang.png', file:`1BAN${dstr}.pdf`},
-      {img:'nutthuchi.png', file:`1QUY${dstr}.pdf`},
-      {img:'nutxuatkho.png', file:`1XUAT${dstr}.pdf`}
+      {img:'nutbanhang.png', file:`${p}BAN${dstr}.pdf`},
+      {img:'nutthuchi.png', file:`${p}QUY${dstr}.pdf`},
+      {img:'nutxuatkho.png', file:`${p}XUAT${dstr}.pdf`}
     ];
 
     const checks = await Promise.all(entries.map(e=>checkFileExists(rawBase()+e.file)));
@@ -155,7 +170,8 @@
 
     if(found){ dateHint.textContent=`Có ${found} báo cáo cho ngày này.`; }
     else{
-      dateHint.textContent='Ngày này KHÔNG có báo cáo.'; showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.');
+      dateHint.textContent='Ngày này KHÔNG có báo cáo.';
+      showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.');
       await jumpToNearestAvailable(d, runToken);
     }
   }
@@ -180,6 +196,27 @@
     showToast('Không tìm thấy ngày có báo cáo trong phạm vi tìm.');
   }
 
+  // Tìm theo hướng (liền trước / liền sau)
+  async function jumpDirectional(fromDate, step){
+    const base = rawBase();
+    const limit = 365;
+    prevBtn.disabled = true; nextBtn.disabled = true;
+    try{
+      for(let i=1;i<=limit;i++){
+        const cand = new Date(fromDate); cand.setDate(cand.getDate()+step*i);
+        if(await hasReportByDDMMYYYY(base, ddmmyyyy(cand))){
+          datePicker.value = toISODate(cand);
+          await loadPDFIcons(datePicker.value);
+          showToast(step<0 ? 'Đã nhảy tới ngày có file liền trước.' : 'Đã nhảy tới ngày có file liền sau.');
+          return;
+        }
+      }
+      showToast('Không thấy ngày phù hợp theo hướng đã chọn.');
+    } finally {
+      prevBtn.disabled = false; nextBtn.disabled = false;
+    }
+  }
+
   // ===== EVENTS =====
   repoSelect.addEventListener('change', ()=>{
     localStorage.setItem('sbm_repo', repoSelect.value);
@@ -187,13 +224,14 @@
   });
 
   datePicker.addEventListener('change', ()=>{ loadPDFIcons(datePicker.value); });
+  prevBtn.addEventListener('click', ()=> jumpDirectional(new Date(datePicker.value), -1));
+  nextBtn.addEventListener('click', ()=> jumpDirectional(new Date(datePicker.value),  1));
 
   // ===== INIT =====
   (function init(){
     const savedRepo = localStorage.getItem('sbm_repo') || 'SBM1';
     repoSelect.value = savedRepo;
 
-    // set date = hôm nay, khoá tương lai
     const today = new Date();
     const todayStr = toISODate(today);
     datePicker.value=todayStr; datePicker.max=todayStr;
@@ -203,7 +241,7 @@
 
   // ===== OFFLINE HANDLING =====
   window.addEventListener('offline', ()=> showToast('Mất kết nối mạng. Một số báo cáo sẽ không tải được.'));
-  window.addEventListener('online', ()=> showToast('Đã khôi phục mạng.'));
+  window.addEventListener('online',  ()=> showToast('Đã khôi phục mạng.'));
 
   // ===== LIGHT TESTS (console) =====
   (function tests(){
@@ -211,6 +249,12 @@
       console.groupCollapsed('Self-tests');
       const t = new Date('2025-10-05T00:00:00');
       console.assert(ddmmyyyy(t)==='05102025','ddmmyyyy failed');
+
+      const dstr='01012025';
+      console.assert(FILE_PATTERNS('1')[0](dstr)==='1BAN01012025.pdf','pattern 1BAN');
+      console.assert(FILE_PATTERNS('2')[1](dstr)==='2QUY01012025.pdf','pattern 2QUY');
+      console.assert(FILE_PATTERNS('3')[2](dstr)==='3XUAT01012025.pdf','pattern 3XUAT');
+
       console.log('All tests passed ✅');
       console.groupEnd();
     }catch(e){ console.error('Self-tests error', e); }

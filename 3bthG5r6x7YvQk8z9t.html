@@ -41,6 +41,7 @@
     .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 14px;border-radius:12px;box-shadow:var(--shadow);font-size:14px;z-index:9999;opacity:0;pointer-events:none;transition:opacity .25s ease}
     .toast.show{opacity:1}
 
+    .adjacent{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
     @media (max-width:460px){ .icons{grid-template-columns:repeat(2,1fr)} }
   </style>
 </head>
@@ -58,6 +59,14 @@
         <label id="dateLabel" for="datePicker">Chọn ngày</label>
         <input type="date" id="datePicker" />
         <div class="hint" id="dateHint">&nbsp;</div>
+
+        <!-- Nút tìm ngày có file liền kề (chỉ dùng ở SỔ SÁCH) -->
+        <div class="adjacent" id="adjacentBtns">
+          <button class="btn" id="prevAvail">◀️ Ngày trước (có file)</button>
+          <button class="btn" id="nextAvail">Ngày sau (có file) ▶️</button>
+        </div>
+
+        <!-- Cụm KINH DOANH -->
         <div id="bizInline" style="display:none">
           <label for="yearSelect">Chọn năm</label>
           <select id="yearSelect"></select>
@@ -76,7 +85,7 @@
 
 <script>
   // ===== BASE (SBM3 ONLY) =====
-  const BASE = 'https://raw.githubusercontent.com/saubinhminh/3ILIILIIXIILI/main/'; // chỉ còn SBM3
+  const BASE = 'https://raw.githubusercontent.com/saubinhminh/3ILIILIIXIILI/main/'; // SBM3
 
   // ===== DOM =====
   const modeSeg = document.getElementById('modeSeg');
@@ -89,6 +98,9 @@
   const yearSelect = document.getElementById('yearSelect');
   const yearHint = document.getElementById('yearHint');
   const openBizInline = document.getElementById('openBizInline');
+  const adjacentBtns = document.getElementById('adjacentBtns');
+  const prevBtn = document.getElementById('prevAvail');
+  const nextBtn = document.getElementById('nextAvail');
 
   // ===== UTILS =====
   const CACHE = new Map();
@@ -96,7 +108,7 @@
   const rawBase = ()=> BASE;
   const toISODate = d => new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().split('T')[0];
   const ddmmyyyy = d => `${String(d.getDate()).padStart(2,'0')}${String(d.getMonth()+1).padStart(2,'0')}${d.getFullYear()}`;
-  const getBizFile = year => `3BAO${year}.pdf`; // cố định SBM3
+  const getBizFile = year => `3BAO${year}.pdf`; // SBM3
 
   const timeout = ms => new Promise(r=>setTimeout(r,ms));
   function withTimeout(promiseFactory, ms){
@@ -118,8 +130,13 @@
     return !!ok;
   }
 
+  // SỔ SÁCH của SBM3: dùng 3BAN/3QUY/3XUAT
   async function hasReportByDDMMYYYY(base, dstr){
-    const urls = [ d=>`1BAN${d}.pdf`, d=>`1QUY${d}.pdf`, d=>`1XUAT${d}.pdf` ].map(fn => base + fn(dstr));
+    const urls = [
+      base + `3BAN${dstr}.pdf`,
+      base + `3QUY${dstr}.pdf`,
+      base + `3XUAT${dstr}.pdf`
+    ];
     const results = await Promise.all(urls.map(u => checkFileExists(u)));
     return results.some(Boolean);
   }
@@ -146,10 +163,11 @@
     renderSkeletons();
     const d = new Date(dateValue);
     const dstr = ddmmyyyy(d);
+
     const entries = [
-      {img:'nutbanhang.png', file:`1BAN${dstr}.pdf`},
-      {img:'nutthuchi.png', file:`1QUY${dstr}.pdf`},
-      {img:'nutxuatkho.png', file:`1XUAT${dstr}.pdf`}
+      {img:'nutbanhang.png', file:`3BAN${dstr}.pdf`},
+      {img:'nutthuchi.png', file:`3QUY${dstr}.pdf`},
+      {img:'nutxuatkho.png', file:`3XUAT${dstr}.pdf`}
     ];
 
     const checks = await Promise.all(entries.map(e=>checkFileExists(rawBase()+e.file)));
@@ -161,7 +179,8 @@
 
     if(found){ dateHint.textContent=`Có ${found} báo cáo cho ngày này.`; }
     else{
-      dateHint.textContent='Ngày này KHÔNG có báo cáo.'; showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.');
+      dateHint.textContent='Ngày này KHÔNG có báo cáo.';
+      showToast('Ngày này không có báo cáo — tự chuyển sang ngày gần nhất có dữ liệu.');
       await jumpToNearestAvailable(d, runToken);
     }
   }
@@ -186,15 +205,38 @@
     showToast('Không tìm thấy ngày có báo cáo trong phạm vi tìm.');
   }
 
+  // Tìm theo hướng (liền trước / liền sau)
+  async function jumpDirectional(fromDate, step){
+    const base = rawBase();
+    const limit = 365;
+    prevBtn.disabled = true; nextBtn.disabled = true;
+    try{
+      for(let i=1;i<=limit;i++){
+        const cand = new Date(fromDate); cand.setDate(cand.getDate()+step*i);
+        if(await hasReportByDDMMYYYY(base, ddmmyyyy(cand))){
+          datePicker.value = toISODate(cand);
+          await loadPDFIcons(datePicker.value);
+          showToast(step<0 ? 'Đã nhảy tới ngày có file liền trước.' : 'Đã nhảy tới ngày có file liền sau.');
+          return;
+        }
+      }
+      showToast('Không thấy ngày phù hợp theo hướng đã chọn.');
+    } finally {
+      prevBtn.disabled = false; nextBtn.disabled = false;
+    }
+  }
+
   // ===== EVENTS =====
   modeSeg.addEventListener('click', e=>{
     const tab=e.target.closest('.tab'); if(!tab) return;
     document.querySelectorAll('.seg .tab').forEach(t=>{ t.classList.remove('active'); t.setAttribute('aria-selected','false'); t.tabIndex=-1; });
     tab.classList.add('active'); tab.setAttribute('aria-selected','true'); tab.tabIndex=0; tab.focus();
     const isBiz = tab.dataset.mode==='kinhdoanh';
+    // toggle vùng hiển thị
     dateLabel.style.display = isBiz? 'none' : '';
     datePicker.style.display = isBiz? 'none' : '';
     dateHint.style.display   = isBiz? 'none' : '';
+    adjacentBtns.style.display = isBiz? 'none' : 'grid';
     bizInline.style.display  = isBiz? 'block': 'none';
     iconsWrap.style.display  = isBiz? 'none' : 'grid';
     if(isBiz) updateBizButtonState();
@@ -229,15 +271,16 @@
 
   datePicker.addEventListener('change', ()=>{ loadPDFIcons(datePicker.value); });
   yearSelect.addEventListener('change', ()=>{ updateBizButtonState(); });
+  prevBtn.addEventListener('click', ()=> jumpDirectional(new Date(datePicker.value), -1));
+  nextBtn.addEventListener('click', ()=> jumpDirectional(new Date(datePicker.value),  1));
 
   // ===== INIT =====
   (function init(){
-    // set date = hôm nay, khoá tương lai
     const today = new Date();
     const todayStr = toISODate(today);
     datePicker.value=todayStr; datePicker.max=todayStr;
 
-    // populate year options (8 năm: từ năm hiện tại+1 xuống hiện tại-6)
+    // populate year options (8 năm: năm hiện tại+1 xuống hiện tại-6)
     const curYear = new Date().getFullYear();
     const start = curYear - 6; const end = curYear + 1;
     yearSelect.innerHTML = '';
@@ -252,15 +295,23 @@
 
   // ===== OFFLINE HANDLING =====
   window.addEventListener('offline', ()=> showToast('Mất kết nối mạng. Một số báo cáo sẽ không tải được.'));
-  window.addEventListener('online', ()=> showToast('Đã khôi phục mạng.'));
+  window.addEventListener('online',  ()=> showToast('Đã khôi phục mạng.'));
 
   // ===== LIGHT TESTS (console) =====
   (function tests(){
     try{
       console.groupCollapsed('Self-tests');
       console.assert(getBizFile('2025')==='3BAO2025.pdf','SBM3 mapping failed');
+
       const t = new Date('2025-10-05T00:00:00');
       console.assert(ddmmyyyy(t)==='05102025','ddmmyyyy failed');
+
+      // test tên file SỔ SÁCH dùng 3*
+      const dstr='01012025';
+      console.assert(`3BAN${dstr}.pdf`==='3BAN01012025.pdf','3BAN pattern');
+      console.assert(`3QUY${dstr}.pdf`==='3QUY01012025.pdf','3QUY pattern');
+      console.assert(`3XUAT${dstr}.pdf`==='3XUAT01012025.pdf','3XUAT pattern');
+
       console.log('All tests passed ✅');
       console.groupEnd();
     }catch(e){ console.error('Self-tests error', e); }
